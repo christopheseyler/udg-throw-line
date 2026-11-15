@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+# Output of `make simulate` / a local `make install DESTDIR=...`
+_install/
+.coverage
+htmlcov/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

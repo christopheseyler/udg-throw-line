@@ -1,0 +1,77 @@
+[Unit]
+Description=UDG throw-line watcher (CSI camera + laser line, local UDP)
+Documentation=file:///usr/lib/udg-throw-line/README.md
+# /data is mounted with "nofail" (udg-yocto fstab), so local-fs.target does
+# not wait for it. Wait for the mount without requiring it: the calibration
+# lives on /data, but the service must still answer the game (and keep the
+# laser under control) if /data is broken.
+Wants=data.mount
+After=data.mount
+# Up before the game, so its first `subscribe` finds the service.
+Before=udg-game.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/udg-throw-line-service
+# The persistent directory must exist before the sandbox below makes the rest
+# read-only. "+" runs this one command outside the sandbox, "-" ignores a
+# failure (no /data partition: calibrations are then not kept).
+ExecStartPre=-+/bin/mkdir -p /data/udg-throw-line
+# Laser off whatever way the service ended (crash, SIGKILL, stop): the
+# service turns it off itself on SIGTERM, this catches everything else.
+# With the gpio backend the line was released by the dead process but the
+# RK3588 keeps its last level: --laser-off requests it again, low.
+ExecStopPost=-/usr/bin/udg-throw-line-service --laser-off
+Restart=always
+RestartSec=1
+# stdout/stderr go to the journal; the service prefixes its lines with
+# sd-daemon "<N>" priorities, so `journalctl -u udg-throw-line -p warning` works.
+StandardOutput=journal
+StandardError=journal
+# The rootfs is read-only: never try to write __pycache__ next to the code.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# /run/udg-throw-line (snapshot.bmp), created by systemd, writable despite
+# ProtectSystem=strict, readable by the game (root).
+RuntimeDirectory=udg-throw-line
+RuntimeDirectoryMode=0755
+# Frames are checked as they arrive: a slightly higher priority than the game
+# keeps the event latency steady when the GPU/CPU is busy.
+Nice=-5
+TimeoutStopSec=5
+
+# --- Hardening -------------------------------------------------------------
+# It runs as root (V4L2, GPIO, sysfs LED, like everything on the kiosk); these
+# options limit what a bug can touch.
+
+# Whole file system read-only for this service (the API trees /dev, /proc and
+# /sys are left to DevicePolicy= and the Protect*= options below)...
+ProtectSystem=strict
+# ...except its own persistent directory. "-": no failure without /data.
+ReadWritePaths=-/data/udg-throw-line
+# Deliberately NOT ProtectKernelTunables=: it makes all of /sys read-only, and
+# the led backend switches the laser through
+# /sys/class/leds/udg-laser/brightness (a symlink into /sys/devices, which
+# ReadWritePaths= cannot reliably re-open).
+PrivateTmp=yes
+NoNewPrivileges=yes
+# No device access except the standard pseudo-devices (null, zero, urandom...)
+# and, by driver name rather than by path (a node created after the unit
+# starts would otherwise stay forbidden until a restart):
+DevicePolicy=closed
+# - the CIF capture nodes and the sensor sub-device (/dev/video*, /dev/v4l-subdev*);
+DeviceAllow=char-video4linux rw
+# - the GPIO character devices (gpio backend).
+DeviceAllow=char-gpiochip rw
+# Only IPv4 sockets: the UDP control socket on 127.0.0.1. No AF_UNIX/AF_NETLINK
+# (the loop wakes up on signals through a pipe, not a socketpair).
+RestrictAddressFamilies=AF_INET
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
